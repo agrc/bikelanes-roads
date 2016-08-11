@@ -276,10 +276,10 @@ if __name__ == '__main__':
     global dataGdb
     print 'Run {}'.format(uniqueRunNum)
     # Workspaces
-    dataGdb = r'C:\GisWork\BikeLanesToRoads\SourceData.gdb'
-    outputWorkspace = r'C:\GisWork\BikeLanesToRoads\OutputResults.gdb'
+    dataGdb = r'.\data\SourceData.gdb'
+    outputWorkspace = r'.\data\OutputResults.gdb'
     # Create a temp unique temp workspace for this run
-    tempWorkspace = r'C:\GisWork\BikeLanesToRoads\temp'
+    tempWorkspace = r'.\data\temp'
     arcpy.CreateFileGDB_management(tempWorkspace,
                                    'run_' + uniqueRunNum)
     tempWorkspace = os.path.join(tempWorkspace, 'run_' + uniqueRunNum + '.gdb')
