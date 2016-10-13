@@ -1,11 +1,9 @@
-"""Add bike left and right attribute to roads from bike lane data."""
+"""Find coverage information for bike lane data and roads."""
 import arcpy
 import os
-from time import strftime
+from configs import Configs
 from time import time
 from operator import itemgetter
-
-uniqueRunNum = strftime("%Y%m%d_%H%M%S")
 
 
 class OtherFeature(object):
@@ -53,12 +51,21 @@ class LineCoverage (object):
         tempRows = []
         for id in self.others:
             coverFeature = self.others[id]
-            tempRows.append((self.lineId,
+            tempRows.append([self.lineId,
                              coverFeature.id,
                              round(coverFeature.joinDistSum, 4),
                              coverFeature.coveragePercent,
-                             coverFeature.intersections))
+                             coverFeature.intersections])
 
+        # Add valid, unique, id full coverage field
+        validCoverIds = set([r[1] for r in tempRows])
+        validCoverIds.discard(-1)
+        if len(validCoverIds) == 3:  # 3 is used because 3 points are created per road line.
+            for r in tempRows:
+                r.append(1)
+        else:
+            for r in tempRows:
+                r.append(0)
         return tempRows
 
 
@@ -135,7 +142,7 @@ class Feature (object):
 
 def createBikeLaneRoadCoverage(roadPointsWithBikeFields):
     """Use the join fields from road point to determine bike lane that covers road segement."""
-    fields = ['LineId', 'LinePos', 'NEAR_FID', 'NEAR_DIST', 'Type', 'Stat_2015']
+    fields = ['LineId', 'LinePos', 'NEAR_FID', 'NEAR_DIST']  # , 'Type', 'Stat_2015']
     rows = None
     lineCoverages = {}
 
@@ -143,9 +150,10 @@ def createBikeLaneRoadCoverage(roadPointsWithBikeFields):
                       ('CoverId', 'LONG'),
                       ('JoinDistSum', 'DOUBLE'),
                       ('Precent', 'FLOAT'),
-                      ('Interx', 'SHORT')]
-    coverageTable = Table.createTable(outputWorkspace,
-                                      'LineCoverage_' + uniqueRunNum,
+                      ('Interx', 'SHORT'),
+                      ('AllUniqueIds', 'SHORT')]
+    coverageTable = Table.createTable(Configs.outputWorkspace,
+                                      'LineCoverage_' + Configs.uniqueRunNum,
                                       coverageFields)
     tableCursor = arcpy.da.InsertCursor(coverageTable.path,
                                         [x[0] for x in coverageFields])
@@ -156,69 +164,31 @@ def createBikeLaneRoadCoverage(roadPointsWithBikeFields):
     lC = None
     for row in rows:
 
-        lineId, linePos, otherId, otherDist, bikeType, bikeStat = row
+        lineId, linePos, otherId, otherDist = row  # , bikeType, bikeStat = row
 
         if lineId not in lineCoverages:
             lineCoverages[lineId] = LineCoverage(lineId, otherId, linePos)
             if lC is not None:  # Popluate the line coverage table.
-                for row in lC.getCoverageRows():
-                    tableCursor.insertRow(row)
+                for lcRow in lC.getCoverageRows():
+                    tableCursor.insertRow(lcRow)
 
         lC = lineCoverages[lineId]
         lC.accumulateCoverage(otherId, linePos, otherDist)
 
     # Insert last row in coverage table
-    for row in lC.getCoverageRows():
-        tableCursor.insertRow(row)
+    for lcRow in lC.getCoverageRows():
+        tableCursor.insertRow(lcRow)
     del tableCursor
 
     return coverageTable
 
 
-def joinBikeTypeFields(coverageTable, coverIdField, typeFields, bikeLanes):
-    """Join the bike type to the coverage table."""
-    arcpy.AddIndex_management(coverageTable.path, 'CoverId', 'coverIdIndex')
-    arcpy.JoinField_management(coverageTable.path, 'CoverId',
-                               bikeLanes.path, bikeLanes.ObjectIdField,
-                               typeFields)
-
-
-def translateBikeFieldsToDomain(coverageTable, typeField, typeCodes, statusField, statusCodes):
-    """Translate bike types to CVDomain_OnStreetBike codes."""
-    typeDomainField = 'BikeTypeCode'
-    arcpy.AddField_management(coverageTable.path, typeDomainField, 'TEXT', field_length=5)
-    with arcpy.da.UpdateCursor(coverageTable.path, [typeField, typeDomainField, statusField]) as cursor:
-        for row in cursor:
-            typeValue = row[0]
-            if typeValue is not None:
-                typeValue = typeValue.lower().strip()
-                if typeValue in typeCodes:
-                    row[1] = typeCodes[typeValue]
-
-            statusValue = row[2]
-            if statusValue is not None:
-                statusValue = statusValue.lower().strip()
-                if statusValue in statusCodes:
-                    row[2] = statusCodes[statusValue]
-
-            cursor.updateRow(row)
-
-
-def joinPointsAndBikelanes(roadPoints, bikeLanes, bikeLaneFields, nearSearchRadius):
+def nearPointsAndBikelanes(roadPoints, bikeLanes, nearSearchRadius):
     """Join relevent fields from bikeLanes to road points."""
     # Near adds NEAR_FID and NEAR_DIST to roadPoints
     nearTime = time()
     arcpy.Near_analysis(roadPoints.path, bikeLanes.path, nearSearchRadius)
     print 'joinPointsAndBikelanes-Near: {}'.format(time() - nearTime)
-    joinFieldTime = time()
-    arcpy.AddIndex_management(triPoint.path, 'NEAR_FID', 'nearIndex')
-    # arcpy.AddIndex_management(bikeLanes.path, bikeLanes.ObjectIdField, 'bikeOidIndex')
-    arcpy.JoinField_management(roadPoints.path,
-                               'NEAR_FID',
-                               bikeLanes.path,
-                               bikeLanes.ObjectIdField,
-                               bikeLaneFields)
-    print 'joinPointsAndBikelanes-Join: {}'.format(time() - joinFieldTime)
 
 
 def createTriPointFeature(lineLayer):
@@ -226,7 +196,7 @@ def createTriPointFeature(lineLayer):
     triPointFields = [('LineId', 'LONG'),
                       ('LinePos', 'FLOAT'),
                       ('SHAPE@', 'geometery')]
-    triPoint = Feature.createFeature(tempWorkspace,
+    triPoint = Feature.createFeature(Configs.tempWorkspace,
                                      'roadTriPoint',
                                      arcpy.Describe(lineLayer).spatialReference,
                                      'POINT',
@@ -264,30 +234,46 @@ def createRoadSubset(fullSgid, bikeLanes):
                                            bikeLanes.path,
                                            distFromBikeLanes)
 
-    return Feature.createFeatureFromLayer(tempWorkspace,
+    return Feature.createFeatureFromLayer(Configs.tempWorkspace,
                                           'RoadsWithin{}'.format(distFromBikeLanes),
                                           subsetLayer)
 
+
+def getRoadCoverageTable(subsetLayer, bikeLanes, distFromBikeLanes):
+    triPointTime = time()
+    triPoint = createTriPointFeature(subsetLayer)
+    print 'Created 3 points along subset roads: {}'.format(round(time() - triPointTime, 3))
+
+    joinNearTime = time()
+    nearPointsAndBikelanes(triPoint, bikeLanes, distFromBikeLanes)
+    print 'Joined bikeLane fields to road points: {}'.format(round(time() - joinNearTime, 3))
+
+    coverageTime = time()
+    roadCoverageTable = createBikeLaneRoadCoverage(triPoint)
+    print 'Created line coverage table: {}'.format(round(time() - coverageTime, 3))
+
+    return roadCoverageTable
 
 if __name__ == '__main__':
     totalTime = time()
     global outputWorkspace
     global tempWorkspace
     global dataGdb
-    print 'Run {}'.format(uniqueRunNum)
+    print 'Run {}'.format(Configs.uniqueRunNum)
     # Workspaces
-    dataGdb = r'.\data\SourceData.gdb'
-    outputWorkspace = r'.\data\OutputResults.gdb'
+    dataDirectory = r'C:\GisWork\BikeLanesToRoads'
+    dataGdb = os.path.join(dataDirectory, 'SourceData.gdb')
+    outputWorkspace = os.path.join(dataDirectory, 'OutputResults.gdb')
     # Create a temp unique temp workspace for this run
-    tempWorkspace = r'.\data\temp'
+    tempWorkspace = os.path.join(dataDirectory, 'temp')
     arcpy.CreateFileGDB_management(tempWorkspace,
-                                   'run_' + uniqueRunNum)
-    tempWorkspace = os.path.join(tempWorkspace, 'run_' + uniqueRunNum + '.gdb')
+                                   'run_' + Configs.uniqueRunNum)
+    tempWorkspace = os.path.join(tempWorkspace, 'run_' + Configs.uniqueRunNum + '.gdb')
     # User provided feature classes.
     fullSgidRoads = Feature(r'Database Connections\Connection to utrans.agrc.utah.gov.sde\UTRANS.TRANSADMIN.Centerlines_Edit',
                             'UTRANS.TRANSADMIN.StatewideStreets')
     bikeLanes = Feature(dataGdb,
-                        'WFRC_BikeLanes')
+                        'SLCountyBikeUpdate')
 
     distFromBikeLanes = 12  # distance to limit the road layer. Chosen after exploratory analysis.
     # Select road within a distance from bike lanes.
@@ -305,36 +291,11 @@ if __name__ == '__main__':
     print 'Created 3 points along subset roads: {}'.format(round(time() - triPointTime, 3))
 
     joinNearTime = time()
-    bikeLaneFields = ['Type', 'Stat_2015']
-    joinPointsAndBikelanes(triPoint, bikeLanes, bikeLaneFields, distFromBikeLanes)
+    nearPointsAndBikelanes(triPoint, bikeLanes, distFromBikeLanes)
     print 'Joined bikeLane fields to road points: {}'.format(round(time() - joinNearTime, 3))
 
     coverageTime = time()
     roadCoverageTable = createBikeLaneRoadCoverage(triPoint)
     print 'Created line coverage table: {}'.format(round(time() - coverageTime, 3))
-
-    joinBikeTypeTime = time()
-    joinBikeTypeFields(roadCoverageTable, 'CoverId', ['Type', 'Stat_2015'], bikeLanes)
-    print 'Joined bike type fields: {}'.format(round(time() - joinBikeTypeTime, 3))
-
-    typeCodes = {
-        'bike lane': '2C',
-        'shared use path': '2C',
-        'shared lane': '3B',
-        'locally identified corridor': '3C',
-        'shoulder bikeway': '2C',
-        'category 1': '1',
-        'category 3': '3',
-        'grade separated bike lane': '1A',
-        'unknown': '2C',
-        '': '2C'
-    }
-    statusCodes = {
-        'proprosed': 'P',
-        'existing': 'E'
-    }
-    translateTime = time()
-    translateBikeFieldsToDomain(roadCoverageTable, 'Type', typeCodes, 'Stat_2015', statusCodes)
-    print 'translate fields: {}'.format(round(time() - translateTime, 3))
 
     print 'Completed: {}'.format(round(time() - totalTime, 3))
