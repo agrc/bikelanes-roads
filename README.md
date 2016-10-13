@@ -2,7 +2,7 @@ road-bikelanes
 =========
 Supports ArcGIS versions: 10.3.1, 10.4
 
-Script to add WFRC bike lane attributes to Statewide Streets.
+Script to add bike lane attributes to Statewide Streets.
 
 ### Running the script
 - Set the Workspaces for temp data and outputs.
